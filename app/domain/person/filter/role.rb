@@ -7,7 +7,7 @@
 
 class Person::Filter::Role < Person::Filter::Base
 
-  self.permitted_args = [:role_type_ids, :role_types]
+  self.permitted_args = [:role_type_ids, :role_types, :kind, :start_at, :finish_at]
 
   def initialize(attr, args)
     super
@@ -15,7 +15,7 @@ class Person::Filter::Role < Person::Filter::Base
   end
 
   def apply(scope)
-    scope.where(roles: { type: args[:role_types] })
+    scope.where(roles: { type: args[:role_types] }).where(duration_conditions)
   end
 
   def blank?
@@ -23,14 +23,22 @@ class Person::Filter::Role < Person::Filter::Base
   end
 
   def to_hash
-    { role_types: args[:role_types] }
+    merge_duration_args(role_types: args[:role_types])
   end
 
   def to_params
-    { role_type_ids: args[:role_type_ids].join(ID_URL_SEPARATOR) }
+    merge_duration_args(role_type_ids: args[:role_type_ids].join(ID_URL_SEPARATOR))
+  end
+
+  def with_deleted_roles?
+    %w(active deleted).include?(args[:kind])
   end
 
   private
+
+  def merge_duration_args(hash)
+    hash.merge(args.slice(:kind, :start_at, :finish_at))
+  end
 
   def initialize_role_types
     classes = role_classes
@@ -51,4 +59,20 @@ class Person::Filter::Role < Person::Filter::Base
     args[:role_types].map { |t| map[t] }.compact
   end
 
+  def duration_conditions
+    case args[:kind]
+    when 'created' then { roles: { created_at: range }  }
+    when 'deleted' then { roles: { deleted_at: range }  }
+    when 'active' then
+      ['roles.created_at <= :max OR ' \
+       '(roles.deleted_at >= :min AND roles.deleted_at <= :max)',
+       min: range.min, max: range.max]
+    end
+  end
+
+  def range
+    start_at = args[:start_at].presence || Role.minimum(:created_at).to_date.to_s
+    finish_at = args[:finish_at].presence || Role.maximum(:updated_at).to_date.to_s
+    Date.parse(start_at).beginning_of_day..Date.parse(finish_at).end_of_day
+  end
 end
